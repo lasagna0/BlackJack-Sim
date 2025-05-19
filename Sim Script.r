@@ -1,5 +1,7 @@
 set.seed(21)
 
+source("blackjack_hand_logic.r") # Load hand playing logic
+
 # Default Game Rules
 default_game_rules <- list(
   num_decks = 6,
@@ -18,6 +20,7 @@ default_game_rules <- list(
   allow_surrender = "Late",             # Options: "No" (or FALSE), "Late". Early Surrender not implemented.
   surrender_restrict_on_dealer_ace = FALSE, # If TRUE, surrender not allowed if dealer shows Ace (some casinos)
   allow_insurance = TRUE,             # New: Allow insurance bets
+  insurance_true_count_threshold = 3, # Example: Take insurance if TC >= 3
   
   # Betting Strategy Rules
   bet_spread_active = FALSE,          # New: Activate variable betting based on true count

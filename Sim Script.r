@@ -236,8 +236,8 @@ simulate_blackjack <- function(n = 10000, strategies, game_rules_input = default
             true_count_at_bet = current_true_count,
             bet_amount = h_detail$bet, # The bet for that specific hand (could be doubled/split)
             player_hand = paste(h_detail$hand, collapse="-"),
-            dealer_initial_hand = paste(outcome$dealer_hand_before_play_if_needed, collapse="-"), # Need to pass dealer initial hand from play_hand
-            dealer_final_hand = paste(outcome$dealer_final_hand_cards, collapse="-"), # Need to pass this from play_hand
+            dealer_initial_hand = paste(outcome$dealer_hand_initial, collapse="-"),
+            dealer_final_hand = paste(outcome$dealer_hand_final, collapse="-"),
             profit = h_detail$outcome_profit,
             insurance_profit = outcome$insurance_profit, # Total insurance profit for the round
             status = h_detail$status
@@ -247,7 +247,8 @@ simulate_blackjack <- function(n = 10000, strategies, game_rules_input = default
             hand_log_data[[length(hand_log_data) + 1]] <- list(
                 simulation_run = strategy_name, hand_number = i, true_count_at_bet = current_true_count,
                 bet_amount = bet_amount, player_hand = "N/A_Initial_BJ_Res", 
-                dealer_initial_hand = "N/A", dealer_final_hand = "N/A",
+                dealer_initial_hand = paste(outcome$dealer_hand_initial, collapse="-"),
+                dealer_final_hand = paste(outcome$dealer_hand_final, collapse="-"),
                 profit = outcome$profit, insurance_profit = outcome$insurance_profit, status = "INITIAL_RESOLUTION"
             )
          }
@@ -401,9 +402,12 @@ strategies_to_test_all <- list(
 )
 
 # Run it with default rules (which now include surrender options)
-cat("Running simulation with default game rules (surrender enabled):\n")
+cat("Running simulation with default game rules (Full Basic Strategy included):\n")
 print(default_game_rules)
-sim_results_default <- simulate_blackjack(n = 1000, strategies = strategies_to_test_all, game_rules_input = default_game_rules)
+sim_results_default <- simulate_blackjack(n = 10000, 
+                                        strategies = strategies_to_test_all, 
+                                        game_rules_input = default_game_rules, 
+                                        output_csv_file = "blackjack_simulation_log.csv") # Increased n back
 
 # Summarize for default rules
 for (strategy_name in names(sim_results_default)) {
@@ -563,7 +567,10 @@ strategies_to_test_all <- list(
 # Run it with default rules (which now include surrender options)
 cat("Running simulation with default game rules (Full Basic Strategy included):\n")
 print(default_game_rules)
-sim_results_default <- simulate_blackjack(n = 10000, strategies = strategies_to_test_all, game_rules_input = default_game_rules) # Increased n back
+sim_results_default <- simulate_blackjack(n = 10000, 
+                                        strategies = strategies_to_test_all, 
+                                        game_rules_input = default_game_rules, 
+                                        output_csv_file = "blackjack_simulation_log.csv") # Increased n back
 
 # Summarize for default rules
 for (strategy_name in names(sim_results_default)) {

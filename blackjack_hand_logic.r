@@ -1,5 +1,12 @@
 # blackjack_hand_logic.r - Core Blackjack Hand Gameplay Logic
 
+# Calculate true count from running count and remaining decks
+get_true_count <- function(running_count, cards_remaining, num_decks) {
+  decks_remaining <- cards_remaining / 52
+  if (decks_remaining <= 0) return(0)  # Prevent division by zero
+  return(running_count / decks_remaining)
+}
+
 # Get card value for gameplay
 card_value <- function(card) {
   if (card %in% c("J", "Q", "K")) return(10)

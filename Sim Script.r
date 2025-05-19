@@ -133,7 +133,7 @@ mimic_dealer_strategy <- function(player_hand, dealer_up_card, game_rules, possi
 poor_double_strategy <- function(player_hand, dealer_up_card, game_rules, possible_actions, current_true_count) {
   player_details <- get_hand_details(player_hand)
   # Simplistic: doesn't use possible_actions for split/surrender yet
-  if (possible_actions$can_double && player_details$value %in% c(10,11)) {
+  if (isTRUE(possible_actions$can_double) && player_details$value %in% c(10,11)) {
     return("double")
   } else if (player_details$value >= 17) {
     return("stand")
@@ -145,9 +145,8 @@ poor_double_strategy <- function(player_hand, dealer_up_card, game_rules, possib
 # Simple Split strategy: very naively splits/doubles, no surrender logic yet
 simple_split_strategy <- function(player_hand, dealer_up_card, game_rules, possible_actions, current_true_count) {
   player_details <- get_hand_details(player_hand)
-  # Simplistic: doesn't use possible_actions for surrender yet
   # Always split pairs if possible (except Aces if not allowed to hit split aces, to avoid forced stand on low value)
-  if (possible_actions$can_split) {
+  if (isTRUE(possible_actions$can_split)) {
     is_ace_pair <- length(player_hand) == 2 && player_hand[1] == "A" && player_hand[2] == "A"
     if (is_ace_pair && !game_rules$hit_split_aces_allowed) {
       # Avoid splitting aces if we can't hit them and might get stuck with low totals
@@ -157,359 +156,12 @@ simple_split_strategy <- function(player_hand, dealer_up_card, game_rules, possi
     }
   }
   
-  if (possible_actions$can_double && player_details$value %in% c(10,11)) { 
+  if (isTRUE(possible_actions$can_double) && player_details$value %in% c(10,11)) { 
     return("double")
   }
   
   if (player_details$value >= 17) return("stand")
   else return("hit")
-}
-
-# Simulate a hand
-play_hand <- function(shoe, count, initial_bet = 10, strategy_fn, game_rules, current_true_count) {
-  
-  # Initial deal
-  if (length(shoe) < 4) { 
-    warning("Shoe too depleted for initial deal.")
-    return(list(shoe = shoe, count = count, profit = 0, hands_played_details = list(), insurance_profit = 0))
-  }
-  player_initial_hand <- shoe[1:2]
-  dealer_hand <- shoe[3:4]
-  shoe <- shoe[-(1:4)]
-  for (card in c(player_initial_hand, dealer_hand)) { count <- count + count_value(card) }
-
-  dealer_up_card <- dealer_hand[1]
-  total_profit <- 0
-  insurance_bet_taken <- 0
-  insurance_profit <- 0
-
-  # List to manage player's hands. Each element is a list: list(cards = hand, bet = bet, status = "active"/"stood"/"busted", times_split = 0)
-  player_hands <- list(list(cards = player_initial_hand, bet = initial_bet, status = "active", times_split = 0, original_hand = TRUE))
-  hands_final_outcomes <- list() # To store final details of each hand for record-keeping
-
-  # Dealer checks for Blackjack if upcard is Ace or 10-value (critical for Late Surrender)
-  dealer_initial_details <- get_hand_details(dealer_hand)
-  dealer_has_blackjack_initially <- FALSE
-  if (card_value(dealer_up_card) %in% c(10, 11)) { # Ace or 10-value card
-    if (dealer_initial_details$is_blackjack) {
-      dealer_has_blackjack_initially <- TRUE
-    }
-  }
-
-  player_initial_details <- get_hand_details(player_initial_hand)
-
-  if (player_initial_details$is_blackjack) {
-    if (dealer_has_blackjack_initially) {
-      total_profit <- 0 
-    } else {
-      total_profit <- initial_bet * game_rules$blackjack_payout
-    }
-    hands_final_outcomes[[1]] <- list(hand = player_initial_hand, bet = initial_bet, outcome_profit = total_profit, final_value = player_initial_details$value, status="blackjack")
-  } else if (dealer_has_blackjack_initially) {
-      total_profit <- -initial_bet 
-      hands_final_outcomes[[1]] <- list(hand = player_initial_hand, bet = initial_bet, outcome_profit = total_profit, final_value = player_initial_details$value, status="lost_to_dealer_bj")
-  } else {
-    # Neither player nor dealer has initial Blackjack. Player's turn.
-    current_hand_idx <- 1
-    while(current_hand_idx <= length(player_hands)) {
-      current_player_hand_info <- player_hands[[current_hand_idx]]
-      current_player_cards <- current_player_hand_info$cards
-      current_player_bet <- current_player_hand_info$bet
-      player_hand_status <- current_player_hand_info$status
-      player_times_split <- current_player_hand_info$times_split
-
-      if (player_hand_status != "active") { # Hand already stood or busted (e.g. from split aces rule)
-        current_hand_idx <- current_hand_idx + 1
-        next
-      }
-
-      player_turn_active_for_this_hand <- TRUE
-      while(player_turn_active_for_this_hand) {
-        player_details <- get_hand_details(current_player_cards)
-
-        if (player_details$value >= 21) { # Bust or 21
-          player_turn_active_for_this_hand <- FALSE
-          player_hands[[current_hand_idx]]$status <- if(player_details$value > 21) "busted" else "stood"
-          player_hands[[current_hand_idx]]$cards <- current_player_cards # Save updated cards
-          break
-        }
-
-        possible_actions <- list(can_hit = TRUE, can_stand = TRUE, can_double = FALSE, can_split = FALSE, can_surrender = FALSE)
-        
-        # Surrender check (only for original hand, first action, if dealer doesn't have BJ)
-        if (current_player_hand_info$original_hand && length(current_player_cards) == 2 && game_rules$allow_surrender == "Late") {
-          if (!(game_rules$surrender_restrict_on_dealer_ace && dealer_up_card == "A")) {
-             possible_actions$can_surrender <- TRUE
-          }
-        }
-
-        is_pair <- length(current_player_cards) == 2 && card_value(current_player_cards[1]) == card_value(current_player_cards[2])
-        is_ace_pair <- is_pair && current_player_cards[1] == "A"
-
-        if (game_rules$allow_split && is_pair && player_times_split < game_rules$max_resplits) {
-          if (is_ace_pair && !game_rules$resplit_aces_allowed && player_times_split > 0) {
-            # Cannot resplit aces if already split from aces and resplit_aces_allowed is false
-            possible_actions$can_split <- FALSE
-          } else {
-            possible_actions$can_split <- TRUE
-          }
-        }
-        
-        if (game_rules$allow_double && length(current_player_cards) == 2) {
-          can_double_this_hand <- FALSE
-          if (player_hands[[current_hand_idx]]$original_hand || game_rules$double_after_split) {
-             if (game_rules$double_on_any_two_cards) {
-                can_double_this_hand <- TRUE
-             } else if (player_details$value %in% game_rules$double_on_totals) {
-                can_double_this_hand <- TRUE
-             }
-          }
-          possible_actions$can_double <- can_double_this_hand
-        }
-
-        action <- strategy_fn(current_player_cards, dealer_up_card, game_rules, possible_actions, current_true_count)
-
-        if (action == "surrender") {
-          if (possible_actions$can_surrender) {
-            total_profit <- total_profit - (current_player_bet / 2) # Lose half the bet for this hand
-            player_hands[[current_hand_idx]]$status <- "surrendered"
-            player_hands[[current_hand_idx]]$bet_lost <- current_player_bet / 2
-            # Add to final outcomes, then this hand is done, and player's turn might be over if it was the only hand
-            hands_final_outcomes[[length(hands_final_outcomes)+1]] <- list(hand = current_player_cards, bet = current_player_bet, outcome_profit = -(current_player_bet / 2), final_value = player_details$value, status = "surrendered")
-            player_turn_active_for_this_hand <- FALSE 
-            # No more hands to play from this original hand if surrendered.
-            # Need to ensure the main loop `while(current_hand_idx <= length(player_hands))` correctly terminates or skips.
-            # If it was the first and only hand, then the dealer will play, and results are calculated.
-            # The key is that player_hands[[current_hand_idx]]$status is no longer "active".
-            # This `break` will exit the inner `while(player_turn_active_for_this_hand)` loop.
-            # The outer loop `while(current_hand_idx <= length(player_hands))` will then increment current_hand_idx.
-            # If surrender was the only action on the only hand, then the loop will terminate as length(player_hands) is 1.
-            break # Exit this hand's action loop
-          } else {
-            warning("Strategy chose surrender when not allowed. Defaulting to hit.")
-            action <- "hit"
-          }
-        }
-        
-        if (action == "split") {
-          if (possible_actions$can_split && length(shoe) >= 2) { # Need at least 2 cards for split
-            # Create two new hands from the current one
-            hand1_card1 <- current_player_cards[1]
-            hand2_card1 <- current_player_cards[2]
-            
-            # Remove current hand, will be replaced by two new ones
-            player_hands[[current_hand_idx]] <- NULL 
-            
-            # Deal second card to first new hand
-            if (length(shoe) < 1) { warning("Shoe ran out splitting hand 1"); break }
-            new_card_h1 <- shoe[1]; shoe <- shoe[-1]; count <- count + count_value(new_card_h1)
-            hand1 <- list(cards = c(hand1_card1, new_card_h1), bet = current_player_bet, status = "active", times_split = player_times_split + 1, original_hand = FALSE)
-            
-            # Deal second card to second new hand
-            if (length(shoe) < 1) { warning("Shoe ran out splitting hand 2"); break }
-            new_card_h2 <- shoe[1]; shoe <- shoe[-1]; count <- count + count_value(new_card_h2)
-            hand2 <- list(cards = c(hand2_card1, new_card_h2), bet = current_player_bet, status = "active", times_split = player_times_split + 1, original_hand = FALSE)
-            
-            # Add new hands to the list to be played (insert them to play next)
-            # If current_hand_idx was pointing to the hand we just split, it will now point to the first of the new hands after this.
-            # Need to be careful with list modification and loop counter.
-            player_hands <- append(player_hands, list(hand1, hand2), after = current_hand_idx -1)
-            current_player_cards <- player_hands[[current_hand_idx]]$cards # Update current_player_cards to the first new hand
-            
-            # Special rule for splitting Aces: usually only one card and done, unless hit_split_aces_allowed
-            if (hand1_card1 == "A" && !game_rules$hit_split_aces_allowed) {
-              player_hands[[current_hand_idx]]$status <- "stood"
-            }
-            if (hand2_card1 == "A" && !game_rules$hit_split_aces_allowed) {
-              player_hands[[current_hand_idx+1]]$status <- "stood"
-            }
-            
-            # Re-evaluate the first new hand immediately in the next iteration of the inner loop.
-            # The outer loop counter (current_hand_idx) will increment later to process the second split hand.
-            player_turn_active_for_this_hand <- TRUE # Continue loop for this new hand1
-            next # Restart while loop for the new hand1
-
-          } else {
-            warning("Strategy chose split when not allowed or shoe empty. Defaulting to hit.")
-            action <- "hit"
-          }
-        }
-        
-        if (action == "double") {
-          if (possible_actions$can_double && length(shoe) >=1) {
-            current_player_bet <- current_player_bet * 2 # Update bet for this hand only
-            player_hands[[current_hand_idx]]$bet <- current_player_bet
-            
-            card <- shoe[1]; shoe <- shoe[-1]; count <- count + count_value(card)
-            current_player_cards <- c(current_player_cards, card)
-            player_hands[[current_hand_idx]]$cards <- current_player_cards
-            player_hands[[current_hand_idx]]$status <- "stood" # Doubling means stand after 1 card
-            player_turn_active_for_this_hand <- FALSE
-          } else {
-            warning("Strategy chose double when not allowed or shoe empty. Defaulting to hit.")
-            action <- "hit"
-          }
-        }
-        
-        if (action == "hit") {
-          if (length(shoe) < 1) { warning("Shoe ran out on hit."); player_turn_active_for_this_hand <- FALSE; break }
-          card <- shoe[1]; shoe <- shoe[-1]; count <- count + count_value(card)
-          current_player_cards <- c(current_player_cards, card)
-          player_hands[[current_hand_idx]]$cards <- current_player_cards
-          # Loop continues, details re-evaluated at top
-        } else if (action == "stand") {
-          player_hands[[current_hand_idx]]$status <- "stood"
-          player_turn_active_for_this_hand <- FALSE
-        } else if (action == "double" || action == "split") {
-          # Already handled, or will be handled by loop structure for split
-        } else {
-          warning(paste("Unknown action:", action, "Defaulting to stand."))
-          player_hands[[current_hand_idx]]$status <- "stood"
-          player_turn_active_for_this_hand <- FALSE
-        }
-      } # End of player's turn for this specific hand
-      current_hand_idx <- current_hand_idx + 1
-    } # End of loop through all player hands (original and split)
-  } # End of if/else for initial Player/Dealer Blackjack check
-
-  # Dealer's turn logic has a slight adjustment for when to proceed
-  # Dealer plays out their hand if:
-  # 1. Player did not have an initial Blackjack AND
-  # 2. Dealer did not have an initial Blackjack AND
-  # 3. At least one player hand is not surrendered or busted (i.e., some action might result in dealer needing to play)
-  dealer_plays = FALSE
-  if (!(player_initial_details$is_blackjack && !dealer_has_blackjack_initially) && !dealer_has_blackjack_initially) {
-    if (length(player_hands) > 0) {
-       actionable_hand_exists <- any(sapply(player_hands, function(h) h$status != "surrendered" && h$status != "busted"))
-       if(player_hands[[1]]$status == "blackjack") actionable_hand_exists <- FALSE # BJ already resolved
-       if(length(hands_final_outcomes) > 0 && hands_final_outcomes[[1]]$status == "blackjack" && !dealer_has_blackjack_initially) actionable_hand_exists <- FALSE
-
-       # The above check is getting complicated. Simpler: if player had BJ or Dealer had BJ, it was resolved.
-       # Otherwise, dealer always plays (unless all player hands busted/surrendered before dealer plays)
-       # Let's re-evaluate the condition for dealer playing.
-       # Dealer plays if the game wasn't immediately ended by an initial player or dealer blackjack.
-       # And if player has any hand that didn't bust or surrender.
-       
-       # Condition for dealer to play their hand:
-       # Game not ended by player BJ AND game not ended by dealer BJ.
-       initial_bjs_ended_game <- (player_initial_details$is_blackjack || dealer_has_blackjack_initially)
-       
-       # Are there any player hands that require the dealer to play?
-       # (i.e. hands that are "stood" or were "active" and might become stood)
-       # The original logic for player turn handles setting status to "busted" or "stood".
-       # Surrendered hands are also effectively out.
-       player_has_live_hands <- FALSE
-       for(ph in player_hands){
-           if(ph$status == "stood" || (ph$status == "active" && get_hand_details(ph$cards)$value <=21) ){
-               # an active hand that is not yet busted (e.g. after split aces forced stand)
-               player_has_live_hands <- TRUE
-               break
-           }
-       }
-       # If player surrendered their only hand, player_has_live_hands will be false because status is "surrendered"
-       # If player busted all hands, player_has_live_hands will be false.
-
-      if (!initial_bjs_ended_game && player_has_live_hands) {
-          dealer_plays <- TRUE
-      }
-    }
-  }
-  
-  # Store current dealer hand details before they hit, in case all player hands bust/surrender and dealer doesn't need to play.
-  dealer_current_details_before_play <- get_hand_details(dealer_hand) 
-
-  if (dealer_plays) {
-    dealer_details_for_play <- dealer_initial_details # This is the 2-card hand
-    while (dealer_details_for_play$value < 17 || (dealer_details_for_play$value == 17 && dealer_details_for_play$is_soft && game_rules$dealer_hits_soft_17)) {
-      if (length(shoe) < 1) { warning("Shoe ran out during dealer hit"); break }
-      card <- shoe[1]; shoe <- shoe[-1]; count <- count + count_value(card)
-      dealer_hand <- c(dealer_hand, card)
-      dealer_details_for_play <- get_hand_details(dealer_hand)
-    }
-  }
-  dealer_final_details <- get_hand_details(dealer_hand) # Final dealer hand, whether they played or not
-
-  # Determine results for each of player's hands if game wasn't ended by initial BJs
-  if (!(player_initial_details$is_blackjack || dealer_has_blackjack_initially)) {
-    # Clear previous total_profit as we are summing up hand by hand now, EXCLUDING surrendered hands handled earlier
-    total_profit <- 0 
-    # Check if any non-surrendered hands already added to hands_final_outcomes (e.g. by surrender logic itself)
-    # We need to ensure we only process hands that need resolution against dealer's final hand.
-    
-    processed_indices_for_profit_calc <- c() # Keep track of hands already added to total_profit by surrender
-    for(hfo_idx in 1:length(hands_final_outcomes)){
-        if(hands_final_outcomes[[hfo_idx]]$status == "surrendered"){
-            total_profit <- total_profit + hands_final_outcomes[[hfo_idx]]$outcome_profit
-            processed_indices_for_profit_calc <- c(processed_indices_for_profit_calc, hfo_idx) # or map to player_hands index if possible
-            # This is tricky because hands_final_outcomes might not map 1:1 to player_hands if splits happened before surrender was an option.
-            # For now, surrender only happens on the *original* hand. So if it was surrendered, player_hands[[1]] is the one.
-        }
-    }
-    # If the first hand was surrendered, its profit is already in total_profit. player_hands[[1]]$status == "surrendered"
-
-    for (i in 1:length(player_hands)) {
-      hand_info <- player_hands[[i]]
-      
-      if (hand_info$status == "surrendered") {
-          # Profit already accounted for when action was taken if it was the original hand.
-          # If a split hand could somehow be surrendered (not typical), this would need adjustment.
-          # Our current logic only allows surrender on original hand.
-          if(hand_info$original_hand) next # Already processed its profit contribution
-      }
-
-      p_cards <- hand_info$cards
-      p_bet <- hand_info$bet
-      p_details <- get_hand_details(p_cards)
-      
-      # Blackjack after split rule
-      is_player_effective_blackjack = p_details$is_blackjack && 
-                                      (hand_info$original_hand || !game_rules$blackjack_after_split_counts_as_21)
-
-      hand_profit <- 0
-      if (is_player_effective_blackjack) {
-         # This case should not be hit if original hand was BJ, as that's handled above.
-         # This implies a BJ on a split hand. Standard payout, not special BJ payout.
-         # Or, if blackjack_after_split_counts_as_21 is FALSE, it is treated as a normal 21.
-         # The initial BJ check handles the true BJ payout scenario.
-         # So here, we just compare vs dealer. If player has 21 (possibly BJ on split) and dealer not BJ.
-         if (dealer_final_details$is_blackjack) { hand_profit <- 0 } # BJ vs BJ is a push
-         else { hand_profit <- p_bet * (if(hand_info$original_hand) game_rules$blackjack_payout else 1) } # Original hand gets BJ payout if it occurs here somehow (should be caught earlier)
-                                                                                                     # Split hand getting A+10 is 21, normal win unless rules change. Let's simplify to 1x bet for A+10 on split.
-         if (!hand_info$original_hand && game_rules$blackjack_after_split_counts_as_21 && p_details$is_blackjack) {
-            profit_multiplier = 1 # Just a normal win, not special payout
-         } else if (is_player_effective_blackjack && !dealer_final_details$is_blackjack) {
-            profit_multiplier = game_rules$blackjack_payout # True BJ
-         } else {
-            profit_multiplier = 1 # Standard win or part of other logic
-         }
-         
-         if (dealer_final_details$is_blackjack) { hand_profit <- 0}
-         else { hand_profit <- p_bet * profit_multiplier}
-
-      } else if (dealer_final_details$is_blackjack) { # Dealer BJ, player no BJ (already handled if player had initial BJ)
-        hand_profit <- -p_bet
-      } else if (p_details$value > 21) {
-        hand_profit <- -p_bet
-      } else if (dealer_final_details$value > 21) {
-        hand_profit <- p_bet
-      } else if (p_details$value > dealer_final_details$value) {
-        hand_profit <- p_bet
-      } else if (p_details$value < dealer_final_details$value) {
-        hand_profit <- -p_bet
-      } else { # Push
-        hand_profit <- 0
-      }
-      total_profit <- total_profit + hand_profit
-      hands_final_outcomes[[length(hands_final_outcomes)+1]] <- list(hand = p_cards, bet = p_bet, outcome_profit = hand_profit, final_value = p_details$value, status = hand_info$status)
-    }
-  } else {
-    # Profit already determined by initial BJ logic, just ensure the hands_final_outcomes is populated if it wasn't (e.g. dealer BJ)
-    if(length(hands_final_outcomes) == 0 && length(player_hands) > 0) {
-         hands_final_outcomes[[1]] <- list(hand = player_hands[[1]]$cards, bet = player_hands[[1]]$bet, outcome_profit = total_profit, final_value = get_hand_details(player_hands[[1]]$cards)$value, status="initial_bj_resolution")
-    }
-  }
-  
-  return(list(shoe = shoe, count = count, profit = total_profit, hands_played_details = hands_final_outcomes, insurance_profit = insurance_profit))
 }
 
 # Run simulation for multiple hands
@@ -661,7 +313,7 @@ for (strategy_name in names(sim_results_custom)) {
 simple_split_strategy <- function(player_hand, dealer_up_card, game_rules, possible_actions, current_true_count) {
   player_details <- get_hand_details(player_hand)
   # Always split pairs if possible (except Aces if not allowed to hit split aces, to avoid forced stand on low value)
-  if (possible_actions$can_split) {
+  if (isTRUE(possible_actions$can_split)) {
     is_ace_pair <- length(player_hand) == 2 && player_hand[1] == "A" && player_hand[2] == "A"
     if (is_ace_pair && !game_rules$hit_split_aces_allowed) {
       # Avoid splitting aces if we can't hit them and might get stuck with low totals
@@ -671,7 +323,7 @@ simple_split_strategy <- function(player_hand, dealer_up_card, game_rules, possi
     }
   }
   
-  if (possible_actions$can_double && player_details$value %in% c(10,11)) { 
+  if (isTRUE(possible_actions$can_double) && player_details$value %in% c(10,11)) { 
     return("double")
   }
   
@@ -712,9 +364,12 @@ custom_game_rules_split_aces_no_hit$allow_surrender <- "No" # Disable surrender 
 
 cat("\n\nRunning simulation with custom game rules (Split Aces - No Hit, Split BJ is 21, No Surrender):\n")
 print(custom_game_rules_split_aces_no_hit)
-sim_results_custom_split <- simulate_blackjack(n = 1000, strategies = strategies_to_test_with_split, game_rules_input = custom_game_rules_split_aces_no_hit) // Using set without surrender strategy for this
-
-# Summarize for custom split rules
+sim_results_custom_split <- simulate_blackjack(
+  n = 1000,
+  strategies = strategies_to_test_with_split,
+  game_rules_input = custom_game_rules_split_aces_no_hit,
+  output_csv_file = "custom_split_results.csv"
+)# Summarize for custom split rules
 for (strategy_name in names(sim_results_custom_split)) {
   cat("\n--- Strategy:", strategy_name, "(Custom Split Rules) ---\n")
   strategy_data <- sim_results_custom_split[[strategy_name]]
@@ -727,12 +382,12 @@ for (strategy_name in names(sim_results_custom_split)) {
 # Example: Strategy that considers surrender
 surrender_strategy <- function(player_hand, dealer_up_card, game_rules, possible_actions, current_true_count) {
   player_details <- get_hand_details(player_hand); dealer_up_value <- card_value(dealer_up_card)
-  if (possible_actions$can_surrender) {
+  if (isTRUE(possible_actions$can_surrender)) {
     if (player_details$value == 16 && (dealer_up_value %in% c(9, 10, 11))) return("surrender")
     if (player_details$value == 15 && dealer_up_value == 10) return("surrender")
   }
-  if (possible_actions$can_split) { is_ace_pair <- length(player_hand) == 2 && player_hand[1] == "A" && player_hand[2] == "A"; if (!(is_ace_pair && !game_rules$hit_split_aces_allowed)) return("split") }
-  if (possible_actions$can_double && player_details$value %in% c(10,11)) return("double")
+  if (isTRUE(possible_actions$can_split)) { is_ace_pair <- length(player_hand) == 2 && player_hand[1] == "A" && player_hand[2] == "A"; if (!(is_ace_pair && !game_rules$hit_split_aces_allowed)) return("split") }
+  if (isTRUE(possible_actions$can_double) && player_details$value %in% c(10,11)) return("double")
   if (player_details$value >= 17) return("stand") else return("hit")
 }
 
@@ -796,7 +451,7 @@ full_basic_strategy <- function(player_hand, dealer_up_card, game_rules, possibl
 
   # Rendición (Surrender) - Late Surrender rules assumed
   # Surrender is only an option for the first two cards.
-  if (possible_actions$can_surrender && length(player_hand) == 2) {
+  if (isTRUE(possible_actions$can_surrender) && length(player_hand) == 2) {
     # Common surrender plays (multi-deck, S17):
     # Player 16 surrenders vs dealer 9, 10, Ace
     if (player_total == 16 && !is_soft_hand && dealer_up_card_value %in% c(9, 10, 11)) return("surrender")
@@ -807,7 +462,7 @@ full_basic_strategy <- function(player_hand, dealer_up_card, game_rules, possibl
   }
 
   # División de Pares (Splitting Pairs)
-  if (possible_actions$can_split && length(player_hand) == 2) {
+  if (isTRUE(possible_actions$can_split) && length(player_hand) == 2) {
     card1_value <- card_value(player_hand[1]) # Actual numeric value for splitting logic
     # Aces and 8s are always split
     if (card1_value == 11) return("split") # Split Aces
@@ -845,24 +500,24 @@ full_basic_strategy <- function(player_hand, dealer_up_card, game_rules, possibl
     if (player_total == 21) return("stand") # Soft 21 (A,10) - already Blackjack if initial 2 cards, or stood if drawn to.
     if (player_total == 20) return("stand") # Soft 20 (A,9) - always stand
     if (player_total == 19) { # Soft 19 (A,8)
-      if (dealer_up_card_value == 6 && possible_actions$can_double && game_rules$double_after_split && length(player_hand) == 2) return("double") # Double vs 6 if allowed (usually DAS only)
+      if (dealer_up_card_value == 6 && isTRUE(possible_actions$can_double) && game_rules$double_after_split && length(player_hand) == 2) return("double") # Double vs 6 if allowed (usually DAS only)
       else return("stand")
     }
     if (player_total == 18) { # Soft 18 (A,7)
-      if (possible_actions$can_double && dealer_up_card_value >= 2 && dealer_up_card_value <= 6 && length(player_hand) == 2) return("double")
+      if (isTRUE(possible_actions$can_double) && dealer_up_card_value >= 2 && dealer_up_card_value <= 6 && length(player_hand) == 2) return("double")
       else if (dealer_up_card_value >= 9 && dealer_up_card_value <= 11) return("hit") # Hit vs 9, 10, Ace
       else return("stand") # Stand vs 2, 7, 8
     }
     if (player_total == 17) { # Soft 17 (A,6)
-      if (possible_actions$can_double && dealer_up_card_value >= 3 && dealer_up_card_value <= 6 && length(player_hand) == 2) return("double")
+      if (isTRUE(possible_actions$can_double) && dealer_up_card_value >= 3 && dealer_up_card_value <= 6 && length(player_hand) == 2) return("double")
       else return("hit")
     }
     if (player_total %in% c(15, 16)) { # Soft 15 (A,4), Soft 16 (A,5)
-      if (possible_actions$can_double && dealer_up_card_value >= 4 && dealer_up_card_value <= 6 && length(player_hand) == 2) return("double")
+      if (isTRUE(possible_actions$can_double) && dealer_up_card_value >= 4 && dealer_up_card_value <= 6 && length(player_hand) == 2) return("double")
       else return("hit")
     }
     if (player_total %in% c(13, 14)) { # Soft 13 (A,2), Soft 14 (A,3)
-      if (possible_actions$can_double && dealer_up_card_value >= 5 && dealer_up_card_value <= 6 && length(player_hand) == 2) return("double")
+      if (isTRUE(possible_actions$can_double) && dealer_up_card_value >= 5 && dealer_up_card_value <= 6 && length(player_hand) == 2) return("double")
       else return("hit")
     }
     # Soft 12 (A,A) would be handled by pair splitting if A,A is initial. If A is drawn to A, it's soft 12 - this is covered by split logic or subsequent hard/soft logic.
@@ -880,13 +535,13 @@ full_basic_strategy <- function(player_hand, dealer_up_card, game_rules, possibl
     else return("hit")
   }
   if (player_total == 11) {
-    if (possible_actions$can_double && length(player_hand) == 2) return("double") else return("hit")
+    if (isTRUE(possible_actions$can_double) && length(player_hand) == 2) return("double") else return("hit")
   }
   if (player_total == 10) {
-    if (possible_actions$can_double && dealer_up_card_value >= 2 && dealer_up_card_value <= 9 && length(player_hand) == 2) return("double") else return("hit")
+    if (isTRUE(possible_actions$can_double) && dealer_up_card_value >= 2 && dealer_up_card_value <= 9 && length(player_hand) == 2) return("double") else return("hit")
   }
   if (player_total == 9) {
-    if (possible_actions$can_double && dealer_up_card_value >= 3 && dealer_up_card_value <= 6 && length(player_hand) == 2) return("double") else return("hit")
+    if (isTRUE(possible_actions$can_double) && dealer_up_card_value >= 3 && dealer_up_card_value <= 6 && length(player_hand) == 2) return("double") else return("hit")
   }
   if (player_total <= 8) return("hit") 
 

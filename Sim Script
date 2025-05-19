@@ -1,0 +1,115 @@
+set.seed(21)
+ 
+# Create and shuffle a labeled shoe
+create_shoe <- function(num_decks = 6) {
+  ranks <- c("2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A")
+  shoe <- rep(ranks, each = 4 * num_decks)
+  return(sample(shoe))
+}
+
+# Get card value for gameplay
+card_value <- function(card) {
+  if (card %in% c("J", "Q", "K")) return(10)
+  else if (card == "A") return(11)
+  else return(as.numeric(card))
+}
+
+# Count value for Hi-Lo system
+count_value <- function(card) {
+  if (card %in% c("2", "3", "4", "5", "6")) return(1)
+  else if (card %in% c("10", "J", "Q", "K", "A")) return(-1)
+  else return(0)
+}
+
+# Compute hand value accounting for Aces
+hand_value <- function(hand) {
+  values <- sapply(hand, card_value)
+  total <- sum(values)
+  aces <- sum(hand == "A")
+  while (total > 21 && aces > 0) {
+    total <- total - 10  # Count Ace as 1 instead of 11
+    aces <- aces - 1
+  }
+  return(total)
+}
+
+# Basic strategy placeholder: just hits below 17
+basic_strategy <- function(player_total, dealer_upcard) {
+  if (player_total >= 17) return("stand")
+  else return("hit")
+}
+
+# Simulate a hand
+play_hand <- function(shoe, count, bet = 10) {
+  if (length(shoe) < 60) shoe <- create_shoe()
+  
+  # Deal cards
+  player <- shoe[1:2]
+  dealer <- shoe[3:4]
+  shoe <- shoe[-(1:4)]
+  
+  # Update count with initial cards
+  for (card in c(player, dealer)) {
+    count <- count + count_value(card)
+  }
+  
+  # Player's turn
+  player_total <- hand_value(player)
+  while (basic_strategy(player_total, dealer[1]) == "hit" && player_total < 21) {
+    card <- shoe[1]
+    shoe <- shoe[-1]
+    player <- c(player, card)
+    player_total <- hand_value(player)
+    count <- count + count_value(card)
+  }
+  
+  # Dealer's turn
+  dealer_total <- hand_value(dealer)
+  while (dealer_total < 17) {
+    card <- shoe[1]
+    shoe <- shoe[-1]
+    dealer <- c(dealer, card)
+    dealer_total <- hand_value(dealer)
+    count <- count + count_value(card)
+  }
+  
+  # Determine result
+  if (player_total > 21) {
+    profit <- -bet
+  } else if (dealer_total > 21 || player_total > dealer_total) {
+    profit <- bet
+  } else if (player_total < dealer_total) {
+    profit <- -bet
+  } else {
+    profit <- 0
+  }
+  
+  return(list(shoe = shoe, count = count, profit = profit))
+}
+
+# Run simulation for multiple hands
+simulate_blackjack <- function(n = 10000) {
+  shoe <- create_shoe()
+  count <- 0
+  bankroll <- 0
+  results <- numeric(n)
+  
+  for (i in 1:n) {
+    outcome <- play_hand(shoe, count)
+    shoe <- outcome$shoe
+    count <- outcome$count
+    results[i] <- outcome$profit
+    bankroll <- bankroll + outcome$profit
+  }
+  
+  return(list(final_bankroll = bankroll, results = results))
+}
+
+# Run it
+sim <- simulate_blackjack(10000)
+
+# Summarize
+cat("Final bankroll:", sim$final_bankroll, "\n")
+cat("EV per hand:", mean(sim$results), "\n")
+cat("Standard deviation:", sd(sim$results), "\n")
+cat("Win rate:", sum(sim$results > 0) / length(sim$results), "\n")
